@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Точка входа: запускает бота."""
+"""Entry point: ``python main.py`` starts the survey broadcasting bot."""
 
-from bot import main
+from bot.app import run
 
 if __name__ == "__main__":
-    main()
+    run()
