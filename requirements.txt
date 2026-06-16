@@ -1,0 +1,4 @@
+# Core Telegram framework (includes APScheduler-backed JobQueue)
+python-telegram-bot[job-queue]==21.6
+# Load configuration from a .env file during local development
+python-dotenv==1.0.1
