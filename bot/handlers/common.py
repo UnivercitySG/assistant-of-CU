@@ -1,119 +1,128 @@
-"""Shared guards, helpers and the public-facing commands (/start, /help)."""
+"""Shared guards, group tracking, and public commands (/start, /help, /surveys)."""
 
 from __future__ import annotations
 
-import functools
 import logging
-from typing import Awaitable, Callable
 
-from telegram import Chat, Update
+from telegram import Update
 from telegram.constants import ChatType, ParseMode
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    ChatMemberHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
+
+from ..database import Database
 
 logger = logging.getLogger(__name__)
 
 GROUP_TYPES = {ChatType.GROUP, ChatType.SUPERGROUP}
 
-HELP_TEXT = (
-    "🤖 <b>Survey Assistant</b>\n\n"
-    "Add me to a group, then an admin can set up a survey and I'll post the "
-    "link and remind everyone before the deadline.\n\n"
-    "<b>Admin commands (in the group):</b>\n"
-    "• /newsurvey — guided setup (text → link → deadline → reminders)\n"
-    "• /settext &lt;text&gt; — set the survey message text\n"
-    "• /setlink &lt;url&gt; — set the survey link\n"
-    "• /setdeadline &lt;when&gt; — e.g. <code>2026-06-20 18:00</code>\n"
-    "• /setreminders &lt;list&gt; — e.g. <code>1d, 2h, 30m</code> before the deadline\n"
-    "• /send — post the survey to the group now and arm reminders\n"
-    "• /remind — send a reminder to the group immediately\n"
-    "• /status — show the current survey configuration\n"
-    "• /delete — remove the current survey and cancel reminders\n"
-    "• /cancel — abort the guided setup\n\n"
-    "Times are interpreted in the bot's configured timezone."
+HELP_ADMIN = (
+    "🤖 <b>Бот опросов — личный кабинет администратора</b>\n\n"
+    "Здесь вы создаёте опросы и отправляете их в группы. В самой группе "
+    "участники видят только список доступных опросов.\n\n"
+    "<b>Команды (в личке):</b>\n"
+    "• /newsurvey — создать опрос (выбор группы → текст → ссылка → дедлайн → напоминания)\n"
+    "• /surveys — список всех опросов с кнопками (отправить, напомнить, удалить)\n"
+    "• /cancel — отменить создание\n\n"
+    "Бот сам опубликует ссылку в выбранной группе и будет напоминать о дедлайне.\n"
+    "Время указывается в часовом поясе, заданном в настройках бота."
+)
+
+HELP_GROUP = (
+    "🤖 <b>Бот опросов</b>\n\n"
+    "Я сам публикую здесь опросы и напоминаю о дедлайнах.\n"
+    "Создание и настройка опросов — в личке с ботом (для администраторов)."
 )
 
 
-async def is_user_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """True if the acting user may manage surveys in this chat.
+def _db(context: ContextTypes.DEFAULT_TYPE) -> Database:
+    return context.application.bot_data["db"]
 
-    A user qualifies if they are a configured super-admin or a Telegram
-    administrator/creator of the current group.
-    """
-    user = update.effective_user
+
+def is_super_admin(user_id: int | None, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """True if the user is one of the configured super-admins."""
+    if user_id is None:
+        return False
+    return user_id in context.application.bot_data["config"].super_admin_ids
+
+
+def _record_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Remember a group chat (and its current title) the bot can see."""
     chat = update.effective_chat
-    if user is None or chat is None:
-        return False
-
-    config = context.application.bot_data["config"]
-    if user.id in config.super_admin_ids:
-        return True
-
-    if chat.type not in GROUP_TYPES:
-        return False
-
-    try:
-        member = await chat.get_member(user.id)
-    except Exception:  # noqa: BLE001
-        logger.warning("Could not fetch membership for user %s", user.id)
-        return False
-    return member.status in ("administrator", "creator")
+    if chat is not None and chat.type in GROUP_TYPES:
+        _db(context).upsert_group(chat.id, chat.title or str(chat.id))
 
 
-def admin_command(
-    handler: Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[object]]
-):
-    """Decorator: restrict a command to group admins used inside a group."""
-
-    @functools.wraps(handler)
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        chat = update.effective_chat
-        if chat is None or chat.type not in GROUP_TYPES:
-            await update.effective_message.reply_text(
-                "This command only works inside a group chat. Add me to a "
-                "group and try again."
-            )
-            return None
-        if not await is_user_admin(update, context):
-            await update.effective_message.reply_text(
-                "🔒 Only group administrators can manage surveys."
-            )
-            return None
-        return await handler(update, context)
-
-    return wrapper
+# -- public commands -------------------------------------------------------
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.effective_message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML)
+    chat = update.effective_chat
+    user = update.effective_user
+    if chat is not None and chat.type in GROUP_TYPES:
+        _record_group(update, context)
+        await update.effective_message.reply_text(HELP_GROUP, parse_mode=ParseMode.HTML)
+        return
+
+    # Private chat: show help plus the user's id so they can be whitelisted.
+    extra = ""
+    if user is not None:
+        recognised = "✅ у вас есть доступ" if is_super_admin(user.id, context) \
+            else "🔒 нет доступа — добавьте этот ID в SUPER_ADMIN_IDS"
+        extra = f"\n\nВаш Telegram ID: <code>{user.id}</code> ({recognised})."
+    await update.effective_message.reply_text(
+        HELP_ADMIN + extra, parse_mode=ParseMode.HTML
+    )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.effective_message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML)
+    await start(update, context)
 
 
-async def on_added_to_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Greet the group when the bot itself is added as a member."""
+# -- group membership tracking ---------------------------------------------
+
+
+async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """React when the bot itself is added to or removed from a group."""
     result = update.my_chat_member
-    if result is None:
+    if result is None or result.chat.type not in GROUP_TYPES:
         return
+
     new_status = result.new_chat_member.status
-    was_member = result.old_chat_member.status in ("member", "administrator", "creator")
+    old_status = result.old_chat_member.status
+    was_member = old_status in ("member", "administrator", "creator")
     is_member = new_status in ("member", "administrator")
-    if is_member and not was_member and result.chat.type in GROUP_TYPES:
+
+    if is_member and not was_member:
+        _db(context).upsert_group(result.chat.id, result.chat.title or str(result.chat.id))
         await context.bot.send_message(
             chat_id=result.chat.id,
             text=(
-                "👋 Thanks for adding me! An admin can run /newsurvey to set up "
-                "a survey, or /help to see everything I can do."
+                "👋 Спасибо, что добавили меня! Я буду публиковать здесь опросы и "
+                "напоминать о дедлайнах. Создание опросов — в личке с ботом."
             ),
         )
+    elif not is_member and was_member:
+        _db(context).remove_group(result.chat.id)
+
+
+async def _passive_group_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Keep group titles fresh by recording any group we see a message in."""
+    _record_group(update, context)
 
 
 def register_common_handlers(application: Application) -> None:
-    from telegram.ext import ChatMemberHandler
-
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(
-        ChatMemberHandler(on_added_to_group, ChatMemberHandler.MY_CHAT_MEMBER)
+        ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER)
+    )
+    # Passive recorder in a separate handler group so it never blocks others.
+    application.add_handler(
+        MessageHandler(filters.ChatType.GROUPS, _passive_group_record), group=1
     )

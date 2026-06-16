@@ -1,49 +1,60 @@
 # assistant-of-CU — Survey Assistant Telegram Bot
 
-A Telegram bot that attaches to group chats and helps an admin run surveys:
-post a survey link to the group, set a deadline, and automatically remind
-members to complete it before time runs out.
+A Telegram bot for running surveys in group chats. **Admins create and manage
+surveys privately, one-on-one with the bot**; the bot then posts the survey
+link into the chosen group and reminds members before the deadline. **Group
+members only view** the available surveys — they can't create or change them.
+
+## How it works
+
+- **Admins work in private chat** with the bot: create a survey, pick which
+  group it targets, set the text, link, deadline and reminders — all through a
+  guided flow with inline buttons.
+- **The bot posts to the group** on the admin's command and sends automatic
+  reminders before the deadline (plus a "closing now" notice).
+- **Group members do nothing** — the survey message simply appears in the group
+  (no command needed), and reminders arrive automatically. Surveys can't be
+  created or changed from inside the group.
 
 ## Features
 
-- **Attaches to group chats.** Add the bot to any group; it greets the group
-  and is ready to use.
-- **Admin-managed.** Only Telegram group administrators (or configured
-  super-admins) can manage surveys.
-- **Editable content.** Set/edit the message text, the survey link, the
-  deadline, and the reminder schedule at any time.
-- **Posts survey links** to the group on demand.
-- **Automatic reminders.** Schedules reminders at chosen offsets before the
-  deadline (e.g. 1 day, 2 hours, 30 minutes before) plus a "closing now"
-  notice at the deadline. Send an ad-hoc reminder any time with `/remind`.
-- **Survives restarts.** Surveys and their schedules are stored in SQLite and
+- **Multiple groups & surveys.** The bot remembers every group it's added to;
+  each group can have several surveys.
+- **Private, admin-only management.** Only configured super-admins (by Telegram
+  user id) can create or manage surveys.
+- **Guided setup.** Text → link → deadline → reminders, with group selection by
+  inline keyboard.
+- **Automatic reminders** at chosen offsets before the deadline (e.g. 1 day,
+  2 hours, 30 minutes) plus a closing notice; ad-hoc reminders via a button.
+- **Survives restarts.** Groups, surveys and schedules are stored in SQLite and
   reminders are rebuilt on startup.
 
 ## Commands
 
-Run these inside the group (admins only):
+**In private chat with the bot (admins only):**
 
 | Command | Description |
 | --- | --- |
-| `/newsurvey` | Guided setup: text → link → deadline → reminders |
-| `/settext <text>` | Set the survey message text |
-| `/setlink <url>` | Set the survey link |
-| `/setdeadline <when>` | e.g. `2026-06-20 18:00` or `20.06.2026 18:00` |
-| `/setreminders <list>` | e.g. `1d, 2h, 30m` before the deadline |
-| `/send` | Post the survey to the group and arm reminders |
-| `/remind` | Send a reminder to the group immediately |
-| `/status` | Show the current survey configuration |
-| `/delete` | Delete the survey and cancel reminders |
-| `/cancel` | Abort the guided setup |
-| `/help` | Show help (works anywhere) |
+| `/start` | Show help and your Telegram user id |
+| `/newsurvey` | Create a survey: pick group → text → link → deadline → reminders |
+| `/surveys` | List all surveys with action buttons (send / remind / delete) |
+| `/cancel` | Abort the current creation flow |
 
-Reminder offsets accept `m` (minutes), `h` (hours), `d` (days), `w` (weeks).
+**In a group:** no commands are needed — the bot posts the survey message and
+reminders directly. (`/help` shows short info.)
+
+Each survey message in private chat has inline buttons:
+**📤 Send** (post to the group and arm reminders), **⏰ Remind** (send a reminder
+now), **🗑 Delete**.
+
+Reminder offsets accept `m` (minutes), `h` (hours), `d` (days), `w` (weeks),
+e.g. `1d, 2h, 30m`.
 
 ## Setup
 
 1. **Create a bot** with [@BotFather](https://t.me/BotFather) and copy the token.
-2. **Disable privacy mode** in @BotFather (`/setprivacy` → *Disable*) so the bot
-   can read group commands. Then add the bot to your group.
+2. **Add the bot to your group(s).** It registers each group automatically when
+   added, so you can pick it as a target later. (Privacy mode can stay on.)
 3. **Install dependencies** (Python 3.11+):
 
    ```bash
@@ -54,8 +65,11 @@ Reminder offsets accept `m` (minutes), `h` (hours), `d` (days), `w` (weeks).
 
    ```bash
    cp .env.example .env
-   # edit .env: set BOT_TOKEN, optionally SUPER_ADMIN_IDS, TIMEZONE
+   # edit .env: set BOT_TOKEN and SUPER_ADMIN_IDS (your Telegram user id)
    ```
+
+   To find your user id, start the bot, open a private chat with it and send
+   `/start` — it replies with your id.
 
 5. **Run** the bot:
 
@@ -68,22 +82,25 @@ Reminder offsets accept `m` (minutes), `h` (hours), `d` (days), `w` (weeks).
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `BOT_TOKEN` | yes | — | Token from @BotFather |
-| `SUPER_ADMIN_IDS` | no | empty | Comma-separated user IDs allowed to manage surveys in any group |
+| `SUPER_ADMIN_IDS` | **yes** | empty | Comma-separated Telegram user ids allowed to create/manage surveys (without one, nobody can) |
 | `DATABASE_PATH` | no | `bot.db` | SQLite file path |
 | `TIMEZONE` | no | `UTC` | IANA timezone for interpreting/displaying times (e.g. `Asia/Almaty`) |
 
 ## Typical flow
 
 ```
-1. Add the bot to your group.
-2. /newsurvey
+1. Add the bot to your group(s).
+2. In PRIVATE chat with the bot (as an admin):
+   /newsurvey
+   → choose the target group from the list
    → "Course feedback — help us improve!"
    → https://forms.gle/your-survey
    → 2026-06-20 18:00
    → 1d, 2h, 30m
-3. /send        # posts the link to the group, arms reminders
-   ...the bot reminds the group 1 day, 2 hours and 30 minutes before,
-   then posts a final notice at the deadline.
+3. Tap 📤 Send → the survey message appears in that group automatically and
+   reminders are armed.
+   ...it reminds the group 1 day, 2 hours and 30 minutes before the deadline,
+   then posts a final notice when it closes.
 ```
 
 ## Project layout
@@ -91,14 +108,14 @@ Reminder offsets accept `m` (minutes), `h` (hours), `d` (days), `w` (weeks).
 ```
 bot/
 ├── config.py          # Environment configuration
-├── models.py          # Survey dataclass
-├── database.py        # SQLite persistence (one survey per chat)
+├── models.py          # Group and Survey dataclasses
+├── database.py        # SQLite persistence (groups + surveys)
 ├── utils.py           # Date/reminder parsing and formatting
 ├── scheduler.py       # JobQueue reminder & deadline scheduling
 ├── main.py            # Application bootstrap / polling
 └── handlers/
-    ├── common.py      # /start, /help, admin guards, group-join greeting
-    └── admin.py       # Survey setup, setters, /send, /remind, /status, /delete
+    ├── common.py      # /start, /help, group /surveys view, group tracking
+    └── admin.py       # Private-chat creation, group selection, send/remind/delete
 run.py                 # Launcher (python run.py)
 tests/                 # Unit tests for parsing and persistence
 ```

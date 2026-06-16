@@ -2,32 +2,38 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 
 @dataclass
-class Survey:
-    """A survey configured for a single group chat.
-
-    Each group chat has at most one active survey at a time. Times are stored
-    and handled internally as timezone-aware UTC ``datetime`` objects.
-    """
+class Group:
+    """A group chat the bot has been added to."""
 
     chat_id: int
+    title: str = ""
+
+
+@dataclass
+class Survey:
+    """A survey targeted at a single group chat.
+
+    A group may have several surveys. Times are stored and handled internally
+    as timezone-aware UTC ``datetime`` objects.
+    """
+
+    group_id: int
     title: str = ""
     link: str = ""
     deadline: datetime | None = None
     # Minutes *before* the deadline at which to send a reminder, e.g. [1440, 60].
-    reminder_offsets: list[int] = None  # type: ignore[assignment]
+    reminder_offsets: list[int] = field(default_factory=list)
     created_by: int | None = None
     created_at: datetime | None = None
-    # Whether the survey link has already been posted to the chat.
+    # Whether the survey link has already been posted to the group.
     is_sent: bool = False
-
-    def __post_init__(self) -> None:
-        if self.reminder_offsets is None:
-            self.reminder_offsets = []
+    # Database id, assigned on first save.
+    id: int | None = None
 
     @property
     def is_complete(self) -> bool:
@@ -39,3 +45,8 @@ class Survey:
             return False
         now = now or datetime.now(timezone.utc)
         return self.deadline <= now
+
+    @property
+    def is_active(self) -> bool:
+        """Sent, complete, and not past its deadline — visible in the group."""
+        return self.is_sent and self.is_complete and not self.deadline_passed()

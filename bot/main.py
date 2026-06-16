@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from telegram import BotCommand
+from telegram import BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats
 from telegram.ext import Application, ContextTypes
 
 from .config import Config
@@ -14,23 +14,26 @@ from .scheduler import reschedule_all
 
 logger = logging.getLogger(__name__)
 
-_COMMANDS = [
-    BotCommand("newsurvey", "Guided survey setup"),
-    BotCommand("settext", "Set the survey message text"),
-    BotCommand("setlink", "Set the survey link"),
-    BotCommand("setdeadline", "Set the deadline"),
-    BotCommand("setreminders", "Set reminder offsets"),
-    BotCommand("send", "Post the survey to the group"),
-    BotCommand("remind", "Send a reminder now"),
-    BotCommand("status", "Show the current survey"),
-    BotCommand("delete", "Delete the survey"),
-    BotCommand("help", "Show help"),
+# Commands shown in the menu for admins in private chat.
+_PRIVATE_COMMANDS = [
+    BotCommand("newsurvey", "Создать опрос"),
+    BotCommand("surveys", "Список опросов"),
+    BotCommand("cancel", "Отменить создание"),
+    BotCommand("help", "Помощь"),
 ]
+
+# Groups only ever see informational help — surveys are posted automatically.
+_GROUP_COMMANDS = [BotCommand("help", "Помощь")]
 
 
 async def _post_init(application: Application) -> None:
     """Run once after the event loop starts: register commands and jobs."""
-    await application.bot.set_my_commands(_COMMANDS)
+    await application.bot.set_my_commands(
+        _PRIVATE_COMMANDS, scope=BotCommandScopeAllPrivateChats()
+    )
+    await application.bot.set_my_commands(
+        _GROUP_COMMANDS, scope=BotCommandScopeAllGroupChats()
+    )
     reschedule_all(application)
     logger.info("Bot ready. Reminder jobs restored from the database.")
 
@@ -67,10 +70,18 @@ def main() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     application = build_application()
+    if not application.bot_data["config"].super_admin_ids:
+        logger.warning(
+            "SUPER_ADMIN_IDS is empty — nobody can create surveys yet. "
+            "Message the bot with /start to get your Telegram ID, then add it "
+            "to SUPER_ADMIN_IDS and restart."
+        )
     logger.info("Starting polling…")
-    # allowed_updates includes my_chat_member so we learn when we're added
-    # to a group.
-    application.run_polling(allowed_updates=["message", "my_chat_member"])
+    # allowed_updates includes my_chat_member (so we learn when we're added to
+    # a group) and callback_query (for the inline action buttons).
+    application.run_polling(
+        allowed_updates=["message", "callback_query", "my_chat_member"]
+    )
 
 
 if __name__ == "__main__":
